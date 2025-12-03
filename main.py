@@ -1,138 +1,126 @@
 import argparse
 import os
-import sys
-
+from pathlib import Path
 import numpy as np
-from pydub import AudioSegment
-from tqdm import tqdm
+import librosa
 
 
-def generate_waveform_svg(audio_path, output_svg_path, samples=1000, aspect=10.0):
-    audio = AudioSegment.from_file(audio_path).set_channels(1)
-    data = np.array(audio.get_array_of_samples(), dtype=np.float32)
-    data = data / 32768.0
+def generate_waveform_svg(audio_path, num_bars=50, aspect_ratio=10.0):
+    y, sr = librosa.load(audio_path, sr=None, mono=True)
 
-    chunk_size = max(1, len(data) // samples)
-    peaks = []
-    for i in range(0, len(data), chunk_size):
-        chunk = data[i : i + chunk_size]
-        peaks.append((np.max(chunk), np.min(chunk)))
+    samples_per_bar = len(y) // num_bars
 
-    view_width = 100
-    view_height = view_width / aspect
-    center_y = view_height / 2
-    bar_width = view_width / len(peaks)
+    bar_heights = []
+    for i in range(num_bars):
+        start_idx = i * samples_per_bar
+        end_idx = start_idx + samples_per_bar
+        segment = y[start_idx:end_idx]
 
-    path = [f"M 0 {center_y}"]
+        if len(segment) > 0:
+            rms = np.sqrt(np.mean(segment ** 2))
+            bar_heights.append(rms)
+        else:
+            bar_heights.append(0)
 
-    for i, (pos, _) in enumerate(peaks):
-        x = (i + 1) * bar_width
-        y = center_y - pos * center_y * 0.95
-        path.append(f"L {x:.6g} {y:.6g}")
+    max_height = max(bar_heights) if max(bar_heights) > 0 else 1
+    bar_heights = [h / max_height for h in bar_heights]
 
-    for i in reversed(range(len(peaks))):
-        x = i * bar_width
-        _, neg = peaks[i]
-        y = center_y - neg * center_y * 0.95
-        path.append(f"L {x:.6g} {y:.6g}")
+    svg_height = 100
+    svg_width = svg_height * aspect_ratio
 
-    path.append("Z")
-    path_data = " ".join(path)
+    bar_width = svg_width / (num_bars * 2 - 1)
+    bar_spacing = bar_width
 
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_width} {view_height}" preserveAspectRatio="xMidYMid slice"><path d="{path_data}" fill="white"/></svg>"""
+    svg_parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_width} {svg_height}" '
+        f'width="{svg_width}" height="{svg_height}">'
+    ]
 
-    with open(output_svg_path, "w") as f:
-        f.write(svg)
+    center_y = svg_height / 2
+
+    for i, height in enumerate(bar_heights):
+        x = i * (bar_width + bar_spacing)
+
+        bar_height = height * svg_height * 0.9
+        y_top = center_y - (bar_height / 2)
+
+        svg_parts.append(
+            f'<rect x="{x:.2f}" y="{y_top:.2f}" '
+            f'width="{bar_width:.2f}" height="{bar_height:.2f}" '
+            f'fill="currentColor" shape-rendering="crispEdges"/>'
+        )
+
+    svg_parts.append('</svg>')
+
+    return '\n'.join(svg_parts)
 
 
-def batch_generate_waveforms(directory, samples=1000, aspect=10.0):
-    output_dir = "waveform_svgs"
-    os.makedirs(output_dir, exist_ok=True)
+def process_directory(input_dir, num_bars=50, aspect_ratio=10.0):
+    input_path = Path(input_dir)
+    output_dir = Path('./waveform_svgs')
 
-    m4a_files = [f for f in os.listdir(directory) if f.endswith(".m4a")]
+    output_dir.mkdir(exist_ok=True)
 
-    if not m4a_files:
-        print(f"No .m4a files found in {directory}")
+    audio_files = list(input_path.glob('*.m4a'))
+
+    if not audio_files:
+        print(f"No .m4a files found in {input_dir}")
         return
 
-    print(f"Found {len(m4a_files)} m4a files.")
+    print(f"Found {len(audio_files)} audio files")
+    print(f"Generating waveforms with {num_bars} bars, aspect ratio {aspect_ratio}:1")
 
-    for filename in tqdm(m4a_files, total=len(m4a_files), desc="Generating SVGs"):
-        input_path = os.path.join(directory, filename)
-        output_filename = filename.replace(".m4a", ".svg")
-        output_path = os.path.join(output_dir, output_filename)
-
+    for idx, audio_file in enumerate(audio_files, 1):
         try:
-            generate_waveform_svg(
-                input_path, output_path, samples=samples, aspect=aspect
+            print(f"Processing [{idx}/{len(audio_files)}]: {audio_file.name}")
+
+            svg_content = generate_waveform_svg(
+                str(audio_file),
+                num_bars=num_bars,
+                aspect_ratio=aspect_ratio
             )
+
+            output_file = output_dir / f"{audio_file.stem}.svg"
+
+            output_file.write_text(svg_content)
+
         except Exception as e:
-            print(f"Failed to generate waveform for {filename}: {e}")
+            print(f"Error processing {audio_file.name}: {e}")
 
-    print(f"Done! Waveforms saved to {output_dir}/")
-
-
-def single_file_waveform(filename, samples=500, aspect=10.0):
-    if not os.path.exists(filename):
-        print(f"Error: File '{filename}' not found")
-        return
-
-    if not filename.endswith(".m4a"):
-        print(f"Error: File must be .m4a format")
-        return
-
-    output_dir = "waveform_svgs"
-    os.makedirs(output_dir, exist_ok=True)
-
-    output_filename = os.path.basename(filename).replace(".m4a", ".svg")
-    output_path = os.path.join(output_dir, output_filename)
-
-    try:
-        generate_waveform_svg(filename, output_path, samples=samples, aspect=aspect)
-        print(f"Generated: {output_path}")
-    except Exception as e:
-        print(f"Failed to generate waveform: {e}")
+    print(f"\nComplete! SVG files saved to {output_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate SVG waveforms from m4a audio files"
+        description='Generate waveform SVG visualizations from audio files'
     )
     parser.add_argument(
-        "-b", "--batch", metavar="DIR", help="Batch process directory of m4a files"
+        'input_dir',
+        help='Directory containing audio files (.m4a)'
     )
     parser.add_argument(
-        "-s",
-        "--samples",
+        '--bars',
         type=int,
-        default=1000,
-        help="Number of sample points (detail level, default: 1000)",
+        default=50,
+        help='Number of vertical bars in the waveform (default: 50)'
     )
     parser.add_argument(
-        "-a",
-        "--aspect",
+        '--aspect-ratio',
         type=float,
-        default=5.0,
-        help="Aspect ratio width:height (default: 5.0 = 5:1)",
+        default=10.0,
+        help='Width to height ratio (default: 10.0 for 10:1)'
     )
 
     args = parser.parse_args()
 
-    if (args.samples is None) != (args.aspect is None):
-        print("Error: Both -s and -a must be provided together, or neither")
-        sys.exit(1)
+    if not os.path.isdir(args.input_dir):
+        print(f"Error: {args.input_dir} is not a valid directory")
+        return 1
 
-    samples = args.samples if args.samples is not None else 1000
-    aspect = args.aspect if args.aspect is not None else 10.0
+    process_directory(args.input_dir, args.bars, args.aspect_ratio)
 
-    if args.batch:
-        batch_generate_waveforms(args.batch, samples=samples, aspect=aspect)
-    elif args.filename:
-        single_file_waveform(args.filename, samples=samples, aspect=aspect)
-    else:
-        parser.print_help()
-        sys.exit(1)
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    exit(main())
