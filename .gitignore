@@ -181,3 +181,4 @@ cython_debug/
 
 # Generated SVGs
 waveform_svgs/
+waveform_svgs
