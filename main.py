@@ -101,7 +101,7 @@ def main():
     parser.add_argument(
         '--bars',
         type=int,
-        default=50,
+        default=100,
         help='Number of vertical bars in the waveform (default: 50)'
     )
     parser.add_argument(
